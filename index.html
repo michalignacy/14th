@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>💗</title>
+  <style>
+    :root{
+      --bg:#ffe5ec;
+      --accent:#e21b55;
+      --ink: rgba(20,20,20,.82);
+      --muted: rgba(20,20,20,.55);
+      --card: rgba(255,255,255,.62);
+      --shadow: rgba(0,0,0,.10);
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0;
+      background:var(--bg);
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+      overflow:hidden;
+    }
+    canvas{
+      position:fixed;
+      inset:0;
+      width:100vw;
+      height:100vh;
+      display:block;
+    }
+    .ui{
+      position:fixed;
+      inset:0;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:18px;
+      pointer-events:none;
+    }
+    .panel{
+      width:min(920px, calc(100vw - 32px));
+      text-align:center;
+    }
+    .eqCard{
+      display:inline-block;
+      padding:14px 16px;
+      border-radius:18px;
+      background:var(--card);
+      box-shadow:0 12px 28px var(--shadow);
+      backdrop-filter: blur(8px);
+      color:var(--ink);
+      font-weight:700;
+      font-size:16px;
+      line-height:1.35;
+    }
+    .mono{
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-weight:700;
+    }
+    .cursor{
+      display:inline-block;
+      width:10px;
+      margin-left:2px;
+      border-bottom: 2px solid rgba(20,20,20,.45);
+      transform: translateY(-1px);
+      animation: blink 0.95s infinite;
+    }
+    @keyframes blink{ 0%,49%{opacity:1} 50%,100%{opacity:0} }
+
+    .kline{
+      margin-top:12px;
+      color:var(--muted);
+      font-size:13px;
+      font-weight:650;
+      opacity:0;
+      transition: opacity .35s ease;
+      pointer-events:none;
+    }
+    .kline.show{ opacity:1; }
+
+    .caption{
+      margin:18px auto 0;
+      width:min(860px, calc(100vw - 32px));
+      padding:14px 16px;
+      border-radius:18px;
+      background:var(--card);
+      box-shadow:0 12px 28px var(--shadow);
+      backdrop-filter: blur(8px);
+      color:var(--ink);
+      font-size:16px;
+      line-height:1.35;
+      font-weight:650;
+      opacity:0;
+      transform: translateY(8px);
+      transition: opacity .8s ease, transform .8s ease;
+      pointer-events:none;
+    }
+    .caption.show{
+      opacity:1;
+      transform: translateY(0);
+    }
+  </style>
+</head>
+
+<body>
+  <canvas id="c"></canvas>
+
+  <div class="ui">
+    <div class="panel">
+      <div class="eqCard">
+        <span class="mono" id="eq"></span><span class="cursor" id="cur"></span>
+      </div>
+      <div class="kline" id="kline"></div>
+      <div class="caption" id="caption">
+        so this will be first february 14th with the person and the love i always dreamed i deserved
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // ----- Canvas setup -----
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d");
+
+  function resize(){
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width  = Math.floor(window.innerWidth * dpr);
+    canvas.height = Math.floor(window.innerHeight * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener("resize", resize, { passive:true });
+  resize();
+
+  // ----- UI elements -----
+  const eqEl = document.getElementById("eq");
+  const curEl = document.getElementById("cur");
+  const kline = document.getElementById("kline");
+  const caption = document.getElementById("caption");
+
+  // Text to type (exactly as you wrote)
+  const eqText = "y=x^(2/3)+0.9sin(kx)sqrt(3-x^2)";
+
+  // ----- Stages -----
+  let stage = "typing"; // typing -> plot -> done
+  let typed = 0;
+
+  // ----- Plot params -----
+  const sqrt3 = Math.sqrt(3);
+  let k = 0.0;
+  const kStart = 0.0;
+  const kEnd = 26.0;          // how “wiggly” it gets
+  const kRampSeconds = 7.5;   // duration of increasing k
+  let plotStartedAt = 0;
+
+  function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+  function easeInOut(t){
+    // smoothstep-ish
+    return t*t*(3 - 2*t);
+  }
+
+  // function y = |x|^(2/3) + 0.9 sin(kx) sqrt(3 - x^2)
+  function f(x, k){
+    const base = Math.pow(Math.abs(x), 2/3);
+    const inside = 3 - x*x;
+    const bump = inside > 0 ? 0.9 * Math.sin(k*x) * Math.sqrt(inside) : 0;
+    return base + bump;
+  }
+
+  // Compute y-range for current k to scale nicely
+  function estimateRange(k){
+    // sample coarse
+    let ymin = Infinity, ymax = -Infinity;
+    const n = 1200;
+    for(let i=0;i<=n;i++){
+      const x = -sqrt3 + (2*sqrt3)*(i/n);
+      const y = f(x,k);
+      if (y < ymin) ymin = y;
+      if (y > ymax) ymax = y;
+    }
+    return {ymin, ymax};
+  }
+
+  function drawPlot(k){
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+
+    // Background
+    ctx.clearRect(0,0,w,h);
+
+    // Plot area (leave space for equation + caption)
+    const topPad = 120;
+    const botPad = 130;
+    const leftPad = 22;
+    const rightPad = 22;
+
+    const pw = w - leftPad - rightPad;
+    const ph = h - topPad - botPad;
+
+    const cx = leftPad + pw/2;
+    const cy = topPad + ph/2;
+
+    // Domain in x: [-sqrt3, sqrt3]
+    const xMin = -sqrt3;
+    const xMax = sqrt3;
+
+    // scale y based on current k
+    const {ymin, ymax} = estimateRange(k);
+    // add margin
+    const yMin = ymin - 0.25;
+    const yMax = ymax + 0.25;
+
+    const sx = pw / (xMax - xMin);
+    const sy = ph / (yMax - yMin);
+
+    // helper: world -> screen
+    const X = (x) => leftPad + (x - xMin) * sx;
+    const Y = (y) => topPad + (yMax - y) * sy;
+
+    // subtle glow stroke
+    const thickness = Math.max(2.4, Math.min(5, Math.min(w,h)*0.004));
+
+    // draw curve
+    const n = 2200;
+    ctx.save();
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+
+    // glow
+    ctx.strokeStyle = "rgba(226,27,85,0.18)";
+    ctx.lineWidth = thickness * 3.2;
+    ctx.beginPath();
+    for(let i=0;i<=n;i++){
+      const x = xMin + (xMax - xMin) * (i/n);
+      const y = f(x,k);
+      if(i===0) ctx.moveTo(X(x), Y(y));
+      else ctx.lineTo(X(x), Y(y));
+    }
+    ctx.stroke();
+
+    // main
+    ctx.strokeStyle = "rgb(226,27,85)";
+    ctx.lineWidth = thickness;
+    ctx.beginPath();
+    for(let i=0;i<=n;i++){
+      const x = xMin + (xMax - xMin) * (i/n);
+      const y = f(x,k);
+      if(i===0) ctx.moveTo(X(x), Y(y));
+      else ctx.lineTo(X(x), Y(y));
+    }
+    ctx.stroke();
+    ctx.restore();
+
+    // optional little dot moving along x for life
+    const t = (performance.now()*0.00012) % 1;
+    const xDot = xMin + (xMax - xMin) * t;
+    const yDot = f(xDot, k);
+    ctx.save();
+    ctx.fillStyle = "rgba(226,27,85,0.85)";
+    ctx.beginPath();
+    ctx.arc(X(xDot), Y(yDot), thickness*1.2, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // ----- Typewriter -----
+  function typewriterTick(){
+    if(stage !== "typing") return;
+
+    typed = Math.min(eqText.length, typed + 1);
+    eqEl.textContent = eqText.slice(0, typed);
+
+    if(typed >= eqText.length){
+      // stop cursor blink after a short beat
+      setTimeout(() => {
+        curEl.style.display = "none";
+        stage = "plot";
+        plotStartedAt = performance.now();
+        kline.classList.add("show");
+      }, 450);
+    } else {
+      setTimeout(typewriterTick, 45);
+    }
+  }
+  typewriterTick();
+
+  // ----- Main animation loop -----
+  function frame(now){
+    if(stage === "plot"){
+      const t = clamp((now - plotStartedAt) / (kRampSeconds * 1000), 0, 1);
+      const e = easeInOut(t);
+      k = kStart + (kEnd - kStart) * e;
+
+      kline.textContent = `k = ${k.toFixed(2)} (increasing…)`;
+
+      drawPlot(k);
+
+      if(t >= 1){
+        stage = "done";
+        kline.textContent = `k = ${kEnd.toFixed(2)}`;
+        // reveal caption after a beat
+        setTimeout(() => caption.classList.add("show"), 550);
+      }
+    } else if(stage === "done"){
+      drawPlot(kEnd);
+    }
+
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
